@@ -104,6 +104,11 @@ create table if not exists public.events (
 
 alter table public.events enable row level security;
 
+drop policy if exists "own_select" on public.events;
+drop policy if exists "own_insert" on public.events;
+drop policy if exists "own_update" on public.events;
+drop policy if exists "own_delete" on public.events;
+
 create policy "own_select" on public.events
   for select using (auth.uid() = user_id);
 create policy "own_insert" on public.events
