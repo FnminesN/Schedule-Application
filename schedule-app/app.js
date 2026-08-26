@@ -5,6 +5,11 @@ const STORAGE_KEY = 'schedule-app-v1';
 const HOUR_PX = 60;
 const COLOR_PALETTE = ['#3b82f6', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#64748b'];
 
+let cloudSyncing = false;
+let cloudTimer = null;
+let suppressAutoSync = false;
+let stateReady = false;
+
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const pad2 = n => String(n).padStart(2, '0');
 
@@ -100,6 +105,7 @@ function seedSample() {
 }
 
 let state = loadState();
+stateReady = true;
 
 function loadState() {
   try {
@@ -111,12 +117,14 @@ function loadState() {
         categories: data.categories && data.categories.length ? data.categories : defaultCategories(),
         notifyEnabled: !!data.notifyEnabled,
         notifiedKeys: data.notifiedKeys || [],
+        deletedEvents: data.deletedEvents || [],
+        sync: data.sync || { config: null, auth: null, lastSyncAt: null },
       };
     }
   } catch (e) {
     console.warn('读取本地数据失败', e);
   }
-  const s = { events: seedSample(), categories: defaultCategories(), notifyEnabled: false, notifiedKeys: [] };
+  const s = { events: seedSample(), categories: defaultCategories(), notifyEnabled: false, notifiedKeys: [], deletedEvents: [], sync: { config: null, auth: null, lastSyncAt: null } };
   persist(s);
   return s;
 }
@@ -128,6 +136,7 @@ function persist(next) {
     console.warn('保存数据失败', e);
     showToast('保存失败：浏览器存储空间可能已满');
   }
+  scheduleCloudSync();
 }
 
 function categoryById(id) {
@@ -767,9 +776,9 @@ function saveEvent() {
 
   if (editingId) {
     const ev = state.events.find(e => e.id === editingId);
-    if (ev) Object.assign(ev, base);
+    if (ev) Object.assign(ev, base, { updatedAt: Date.now() });
   } else {
-    state.events.push({ id: uid(), ...base, createdAt: Date.now() });
+    state.events.push({ id: uid(), ...base, createdAt: Date.now(), updatedAt: Date.now() });
   }
   persist();
   closeModal('eventModal');
@@ -783,6 +792,8 @@ function deleteEvent() {
   if (!ev) return;
   if (!confirm(`确定删除「${ev.title}」吗？`)) return;
   state.events = state.events.filter(e => e.id !== editingId);
+  state.deletedEvents = state.deletedEvents.filter(d => d.id !== editingId);
+  state.deletedEvents.push({ id: editingId, updatedAt: Date.now() });
   persist();
   closeModal('eventModal');
   renderChips();
@@ -849,7 +860,7 @@ function confirmCopy() {
   if (!target) return showToast('请选择目标日期');
   const ids = [...$('copyList').querySelectorAll('input[type="checkbox"]:checked:not(.copy-all input)')].map(cb => cb.dataset.id);
   const src = state.events.filter(e => ids.includes(e.id));
-  const copies = src.map(e => ({ ...e, id: uid(), date: target, createdAt: Date.now() }));
+  const copies = src.map(e => ({ ...e, id: uid(), date: target, createdAt: Date.now(), updatedAt: Date.now() }));
   state.events.push(...copies);
   persist();
   closeModal('copyDialog');
@@ -1130,6 +1141,7 @@ function confirmImport() {
       notes: String(raw.notes || ''),
       remindMinutes: raw.remindMinutes == null || raw.remindMinutes === '' ? null : Math.max(0, parseInt(raw.remindMinutes, 10) || 0),
       createdAt: Date.now(),
+      updatedAt: Date.now(),
     });
     added++;
   });
@@ -1370,11 +1382,396 @@ function bindEvents() {
       showToast('系统通知未开启，仅显示页面内提醒');
     }
   });
+
+  $('syncBtn').addEventListener('click', () => {
+    renderSyncUI();
+    openModal('syncDialog');
+  });
+  $('syncCloseBtn').addEventListener('click', () => closeModal('syncDialog'));
+  $('syncSaveConfig').addEventListener('click', saveSyncConfig);
+  $('syncLoginBtn').addEventListener('click', syncLogin);
+  $('syncRegisterBtn').addEventListener('click', syncRegister);
+  $('syncNowBtn').addEventListener('click', syncNow);
+  $('syncPullBtn').addEventListener('click', syncPull);
+  $('syncLogoutBtn').addEventListener('click', () => syncLogout(false));
+  $('syncUrl').addEventListener('input', () => { $('syncUrl').dataset.touched = '1'; });
+  $('syncKey').addEventListener('input', () => { $('syncKey').dataset.touched = '1'; });
 }
 
 function renderAll() {
   renderChips();
   renderWeek();
+}
+
+/* ================= 云同步（Supabase） ================= */
+function cloudConfig() { return (state.sync && state.sync.config) || null; }
+function cloudAuth() { return (state.sync && state.sync.auth) || null; }
+function isCloudConnected() { return !!(cloudConfig() && cloudAuth() && cloudAuth().accessToken); }
+
+async function fetchWithTimeout(url, options = {}, ms = 15000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, Object.assign({}, options, { signal: ctrl.signal }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function persistSilently(next) {
+  suppressAutoSync = true;
+  try { persist(next); } finally { suppressAutoSync = false; }
+}
+
+function scheduleCloudSync() {
+  if (!stateReady) return;
+  if (suppressAutoSync || !isCloudConnected() || cloudSyncing) return;
+  clearTimeout(cloudTimer);
+  cloudTimer = setTimeout(() => { syncNow().catch(() => {}); }, 2000);
+}
+
+function setSyncStatus(msg) {
+  const el = $('syncStatus');
+  if (el) el.textContent = msg || '';
+}
+
+function renderSyncUI() {
+  const cfg = cloudConfig();
+  const auth = cloudAuth();
+  if ($('syncConfigSection')) $('syncConfigSection').hidden = !!cfg;
+  if ($('syncLoginSection')) $('syncLoginSection').hidden = !cfg || !!(auth && auth.accessToken);
+  if ($('syncUserSection')) $('syncUserSection').hidden = !(auth && auth.accessToken);
+  if (cfg && $('syncUrl')) {
+    if (!$('syncUrl').dataset.touched) $('syncUrl').value = cfg.url;
+    if (!$('syncKey').dataset.touched) $('syncKey').value = cfg.key;
+  }
+  if (auth && auth.accessToken && $('syncUserInfo')) {
+    const last = state.sync.lastSyncAt ? new Date(state.sync.lastSyncAt).toLocaleString() : '尚未同步';
+    $('syncUserInfo').textContent = `${auth.userEmail} · 上次同步：${last}`;
+  }
+}
+
+async function supabaseRequest(path, options = {}) {
+  const cfg = cloudConfig();
+  const auth = cloudAuth();
+  if (!cfg) throw new Error('尚未配置 Supabase');
+  const headers = {
+    'apikey': cfg.key,
+    'Content-Type': 'application/json',
+    ...(auth && auth.accessToken ? { 'Authorization': `Bearer ${auth.accessToken}` } : {}),
+    ...(options.headers || {}),
+  };
+  const res = await fetchWithTimeout(`${cfg.url}${path}`, { ...options, headers });
+  if (res.status === 401 && auth && auth.refreshToken) {
+    const ok = await tryRefreshToken();
+    if (ok) return supabaseRequest(path, options);
+  }
+  if (!res.ok) {
+    let msg = `请求失败（${res.status}）`;
+    try {
+      const j = await res.json();
+      msg = j.message || j.error_description || j.msg || j.error || msg;
+    } catch (e) { /* 保留默认信息 */ }
+    throw new Error(msg);
+  }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+async function tryRefreshToken() {
+  const cfg = cloudConfig();
+  const auth = cloudAuth();
+  if (!cfg || !auth || !auth.refreshToken) return false;
+  try {
+    const res = await fetchWithTimeout(`${cfg.url}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { 'apikey': cfg.key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: auth.refreshToken }),
+    });
+    const j = await res.json();
+    if (!res.ok || !j.access_token) {
+      await syncLogout(true);
+      return false;
+    }
+    state.sync.auth = {
+      ...auth,
+      accessToken: j.access_token,
+      refreshToken: j.refresh_token || auth.refreshToken,
+      userId: auth.userId || (j.user && j.user.id),
+      userEmail: auth.userEmail || (j.user && j.user.email),
+    };
+    persistSilently();
+    renderSyncUI();
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function syncLogin() {
+  const email = $('syncEmail').value.trim();
+  const password = $('syncPassword').value;
+  if (!email || !password) return showToast('请输入邮箱和密码');
+  const cfg = cloudConfig();
+  if (!cfg) return showToast('请先保存 Supabase 配置');
+  setSyncStatus('登录中…');
+  try {
+    const res = await fetchWithTimeout(`${cfg.url}/auth/v1/token?grant_type=password`, {
+      method: 'POST',
+      headers: { 'apikey': cfg.key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const j = await res.json();
+    if (!res.ok || !j.access_token) {
+      setSyncStatus('');
+      return showToast(j.message || j.error_description || j.msg || '登录失败，请检查邮箱和密码');
+    }
+    state.sync.auth = {
+      accessToken: j.access_token,
+      refreshToken: j.refresh_token,
+      userId: j.user.id,
+      userEmail: j.user.email,
+    };
+    state.sync.lastSyncAt = null;
+    persistSilently();
+    renderSyncUI();
+    setSyncStatus(`已登录 ${j.user.email}`);
+    showToast('登录成功，正在同步…');
+    await syncNow();
+  } catch (e) {
+    setSyncStatus('');
+    showToast('网络错误：' + e.message);
+  }
+}
+
+async function syncRegister() {
+  const email = $('syncEmail').value.trim();
+  const password = $('syncPassword').value;
+  if (!email || !password) return showToast('请输入邮箱和密码');
+  if (password.length < 6) return showToast('密码至少需要 6 位');
+  const cfg = cloudConfig();
+  if (!cfg) return showToast('请先保存 Supabase 配置');
+  setSyncStatus('注册中…');
+  try {
+    const res = await fetchWithTimeout(`${cfg.url}/auth/v1/signup`, {
+      method: 'POST',
+      headers: { 'apikey': cfg.key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const j = await res.json();
+    if (!res.ok) {
+      setSyncStatus('');
+      return showToast(j.message || j.error_description || j.msg || '注册失败');
+    }
+    if (j.access_token) {
+      state.sync.auth = {
+        accessToken: j.access_token,
+        refreshToken: j.refresh_token,
+        userId: j.user.id,
+        userEmail: j.user.email,
+      };
+      state.sync.lastSyncAt = null;
+      persistSilently();
+      renderSyncUI();
+      setSyncStatus(`已登录 ${j.user.email}`);
+      showToast('注册成功，正在同步…');
+      await syncNow();
+    } else {
+      setSyncStatus('');
+      showToast('注册成功！请前往邮箱确认后登录');
+    }
+  } catch (e) {
+    setSyncStatus('');
+    showToast('网络错误：' + e.message);
+  }
+}
+
+async function syncLogout(silent) {
+  if (state.sync) state.sync.auth = null;
+  persistSilently();
+  renderSyncUI();
+  if (!silent) showToast('已退出云同步');
+}
+
+function cloudRowToEvent(r) {
+  return {
+    id: r.id,
+    title: r.title,
+    date: r.date,
+    startTime: r.start_time,
+    endTime: r.end_time,
+    category: r.category,
+    notes: r.notes || '',
+    remindMinutes: r.remind_minutes == null ? null : r.remind_minutes,
+    createdAt: r.created_at || Date.now(),
+    updatedAt: r.updated_at || r.created_at || Date.now(),
+  };
+}
+
+function mergeCloudRows(rows) {
+  const localById = new Map(state.events.map(e => [e.id, e]));
+  for (const r of rows) {
+    const cloudTs = r.updated_at || r.created_at || 0;
+    const local = localById.get(r.id);
+    if (r.deleted) {
+      const localTs = local ? (local.updatedAt || local.createdAt || 0) : 0;
+      if (local && cloudTs >= localTs) {
+        state.events = state.events.filter(e => e.id !== r.id);
+      }
+      if (cloudTs >= localTs) {
+        state.deletedEvents = state.deletedEvents.filter(d => d.id !== r.id);
+        state.deletedEvents.push({ id: r.id, updatedAt: cloudTs });
+      }
+      continue;
+    }
+    if (local) {
+      const localTs = local.updatedAt || local.createdAt || 0;
+      if (cloudTs > localTs) {
+        const idx = state.events.findIndex(e => e.id === r.id);
+        state.events[idx] = cloudRowToEvent(r);
+      }
+    } else {
+      const tomb = state.deletedEvents.find(d => d.id === r.id);
+      if (!tomb || cloudTs >= tomb.updatedAt) {
+        state.events.push(cloudRowToEvent(r));
+      }
+    }
+  }
+  // 本地重新创建的日程比云墓碑新时，清除墓碑
+  state.deletedEvents = state.deletedEvents.filter(t => {
+    const ev = state.events.find(e => e.id === t.id);
+    return !ev || (ev.updatedAt || ev.createdAt || 0) <= t.updatedAt;
+  });
+}
+
+async function pullEvents() {
+  const auth = cloudAuth();
+  const q = `/rest/v1/events?select=*&user_id=eq.${encodeURIComponent(auth.userId)}&order=updated_at.asc`;
+  const rows = await supabaseRequest(q);
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function pushLocalChanges() {
+  const cfg = cloudConfig();
+  const auth = cloudAuth();
+  const rows = state.events.map(e => ({
+    id: e.id,
+    user_id: auth.userId,
+    title: e.title,
+    date: e.date,
+    start_time: e.startTime,
+    end_time: e.endTime,
+    category: e.category,
+    notes: e.notes || '',
+    remind_minutes: e.remindMinutes == null ? null : e.remindMinutes,
+    created_at: e.createdAt || Date.now(),
+    updated_at: e.updatedAt || Date.now(),
+    deleted: false,
+  }));
+  for (const t of state.deletedEvents) {
+    rows.push({
+      id: t.id,
+      user_id: auth.userId,
+      title: '',
+      date: '1970-01-01',
+      created_at: 0,
+      updated_at: t.updatedAt,
+      deleted: true,
+    });
+  }
+  if (!rows.length) return;
+  const res = await fetchWithTimeout(`${cfg.url}/rest/v1/events?on_conflict=id`, {
+    method: 'POST',
+    headers: {
+      'apikey': cfg.key,
+      'Authorization': `Bearer ${auth.accessToken}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates,return=minimal',
+    },
+    body: JSON.stringify(rows),
+  });
+  if (!res.ok) {
+    if (res.status === 401 && await tryRefreshToken()) return pushLocalChanges();
+    let msg = `上传失败（${res.status}）`;
+    try { const j = await res.json(); msg = j.message || msg; } catch (e) { /* 保留 */ }
+    throw new Error(msg);
+  }
+}
+
+async function syncNow() {
+  if (!isCloudConnected()) return showToast('请先登录云同步');
+  if (cloudSyncing) return;
+  cloudSyncing = true;
+  setSyncStatus('同步中…');
+  try {
+    const rows = await pullEvents();
+    mergeCloudRows(rows);
+    await pushLocalChanges();
+    state.sync.lastSyncAt = Date.now();
+    persistSilently();
+    renderSyncUI();
+    renderAll();
+    setSyncStatus(`已同步 ${new Date(state.sync.lastSyncAt).toLocaleString()}`);
+  } catch (e) {
+    console.warn('云同步失败', e);
+    setSyncStatus('');
+    const msg = String(e.message || '');
+    if (/does not exist|relation|undefined_table|42P01/i.test(msg)) {
+      showToast('同步失败：云端还没有 events 表，请先在 Supabase SQL Editor 运行 README 里的建表 SQL');
+    } else {
+      showToast('同步失败：' + msg);
+    }
+  } finally {
+    cloudSyncing = false;
+  }
+}
+
+async function syncPull() {
+  if (!isCloudConnected()) return showToast('请先登录云同步');
+  if (!confirm('将从云端覆盖本地所有日程，本地未同步的改动会丢失。确定继续？')) return;
+  setSyncStatus('从云端恢复中…');
+  try {
+    const rows = await pullEvents();
+    state.events = rows.filter(r => !r.deleted).map(cloudRowToEvent);
+    state.deletedEvents = rows.filter(r => r.deleted).map(r => ({ id: r.id, updatedAt: r.updated_at || r.created_at || 0 }));
+    state.sync.lastSyncAt = Date.now();
+    persistSilently();
+    renderSyncUI();
+    renderAll();
+    setSyncStatus(`已从云端恢复 ${state.events.length} 条日程`);
+  } catch (e) {
+    setSyncStatus('');
+    showToast('恢复失败：' + e.message);
+  }
+}
+
+function saveSyncConfig() {
+  const url = $('syncUrl').value.trim().replace(/\/+$/, '');
+  const key = $('syncKey').value.trim();
+  if (!/^https:\/\/[^/\s]+\.[^/\s]+$/.test(url)) return showToast('请输入正确的项目地址，例如 https://xxxx.supabase.co');
+  if (!key) return showToast('请输入 anon 密钥');
+  state.sync = Object.assign({}, state.sync || {}, { config: { url, key } });
+  $('syncUrl').dataset.touched = '1';
+  $('syncKey').dataset.touched = '1';
+  persistSilently();
+  renderSyncUI();
+  showToast('配置已保存，请登录');
+}
+
+function cloudInit() {
+  if (isCloudConnected()) {
+    syncNow().catch(() => {});
+  } else if (cloudConfig() && !cloudAuth()) {
+    console.info('已配置云同步，等待登录');
+  }
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol === 'file:') return;
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(e => console.warn('Service Worker 注册失败', e));
+  });
 }
 
 function init() {
@@ -1383,6 +1780,8 @@ function init() {
   updateBackArea();
   checkReminders();
   setInterval(checkReminders, 30000);
+  cloudInit();
+  registerServiceWorker();
 }
 
 init();

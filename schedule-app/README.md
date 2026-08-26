@@ -1,6 +1,6 @@
 # 我的日程（网页版）
 
-一个零依赖、纯前端运行的日程安排应用：打开页面即可使用，所有数据保存在当前浏览器中。
+一个零依赖、纯前端运行的日程安排应用：打开页面即可使用。支持 PWA（可安装到手机/电脑桌面、离线打开），并可选接入 Supabase 免费云存储，实现跨设备云同步。
 
 ## 二级菜单导航
 
@@ -26,6 +26,17 @@ python -m http.server 8000
 ```
 
 然后访问 `http://localhost:8000`。
+
+正式线上地址（GitHub Pages）：`https://FnminesN.github.io/Schedule-Application/`
+
+## 手机端（PWA）
+
+用手机浏览器（Chrome / Edge / Safari）打开线上地址后：
+
+- **Android / Chrome**：菜单里选择「添加到主屏幕」或「安装应用」。
+- **iPhone / Safari**：点分享按钮 → 「添加到主屏幕」。
+
+添加后应用会像普通 App 一样有独立图标，并且**离线也能打开**（查看已加载过的界面）。
 
 ## 功能
 
@@ -61,7 +72,55 @@ python -m http.server 8000
 
 ## 数据与提醒须知
 
-- 数据保存在**当前浏览器的本地存储**中，更换浏览器或清除站点数据会丢失，重要数据请定期「导出 JSON 备份」。
+- 未配置云同步时，数据保存在**当前浏览器的本地存储**中，更换浏览器或清除站点数据会丢失，重要数据请定期「导出 JSON 备份」。
 - 系统通知需要浏览器授权，且**页面保持打开**时才会触发；页面内提示不受影响。
 - 右上角「🔔 提醒」可开关系统通知并发送测试通知。
 - 目前为单人使用，暂不支持多人共享（按你的需求未实现）。
+
+## 云同步（Supabase）
+
+应用右上角新增「☁️ 同步」入口，接入 [Supabase](https://supabase.com) 免费项目后，日程会跟随账号在手机和电脑之间同步。免费额度足够个人日常使用。
+
+### 第一次配置（约 5 分钟）
+
+1. 打开 [supabase.com](https://supabase.com) 注册/登录，点击 **New project** 创建一个项目（区域任选，如 Asia 或新加坡）。
+2. 项目创建完成后，进入 **SQL Editor**，新建查询并运行下面这段 SQL，创建 `events` 表和安全策略：
+
+```sql
+create table if not exists public.events (
+  id text primary key,
+  user_id uuid not null default auth.uid(),
+  title text not null,
+  date text not null,
+  start_time text,
+  end_time text,
+  category text,
+  notes text default '',
+  remind_minutes int,
+  created_at bigint,
+  updated_at bigint,
+  deleted boolean default false
+);
+
+alter table public.events enable row level security;
+
+create policy "own_select" on public.events
+  for select using (auth.uid() = user_id);
+create policy "own_insert" on public.events
+  for insert with check (auth.uid() = user_id);
+create policy "own_update" on public.events
+  for update using (auth.uid() = user_id);
+create policy "own_delete" on public.events
+  for delete using (auth.uid() = user_id);
+```
+
+3. 进入 **Project Settings → API**，复制 **Project URL** 和 **anon public key**。
+4. 打开应用 → 右上角「☁️ 同步」→ 粘贴项目地址和密钥 → 保存配置。
+5. 输入邮箱和密码，点「注册并登录」（如果开启了邮箱确认，先去邮箱点确认链接，再回来登录）。
+
+### 使用说明
+
+- 登录后，日程的**增删改会自动同步**到云端（修改后约 2 秒自动上传）。
+- 「立即同步」：手动拉取云端并合并（同一日程以最后修改的时间为准）。
+- 「从云端恢复」：用云端数据**覆盖**本地，适合换新设备时使用。
+- 退出登录后应用恢复纯本地模式，数据仍留在浏览器里。

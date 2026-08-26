@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>我的日程</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
+  <meta name="theme-color" content="#3b82f6">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="我的日程">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -24,6 +30,7 @@
       <button id="notifyBtn" class="btn ghost" title="通知提醒设置">🔔 提醒</button>
       <button id="importBtn" class="btn ghost" title="导入日程（JSON/CSV/ICS）">导入</button>
       <button id="exportBtn" class="btn ghost" title="导出备份">导出</button>
+      <button id="syncBtn" class="btn ghost" title="云同步设置">☁️ 同步</button>
       <button id="newEventBtn" class="btn primary">＋ 新建日程</button>
     </div>
   </header>
@@ -229,6 +236,56 @@
         <span class="spacer"></span>
         <button id="notifyTestBtn" class="btn">发送测试通知</button>
         <button id="notifyCloseBtn" class="btn primary">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 云同步设置弹窗 -->
+  <div class="modal-backdrop" id="syncDialog">
+    <div class="modal small">
+      <h2>☁️ 云同步</h2>
+      <p class="muted">连接 Supabase 免费云存储后，日程会同步到账号，手机和电脑打开同一份数据。</p>
+      <div id="syncStatus" class="sync-status"></div>
+
+      <div id="syncConfigSection" class="sync-section">
+        <label class="field full">
+          <span>Supabase 项目地址（Project URL）</span>
+          <input type="url" id="syncUrl" placeholder="https://xxxx.supabase.co" autocomplete="off">
+        </label>
+        <label class="field full">
+          <span>匿名密钥（anon public key）</span>
+          <input type="password" id="syncKey" placeholder="eyJhbGciOi..." autocomplete="off">
+        </label>
+        <button id="syncSaveConfig" class="btn primary">保存配置</button>
+      </div>
+
+      <div id="syncLoginSection" class="sync-section" hidden>
+        <label class="field full">
+          <span>邮箱</span>
+          <input type="email" id="syncEmail" placeholder="you@example.com" autocomplete="email">
+        </label>
+        <label class="field full">
+          <span>密码</span>
+          <input type="password" id="syncPassword" placeholder="至少 6 位" autocomplete="current-password">
+        </label>
+        <div class="sync-actions">
+          <button id="syncRegisterBtn" class="btn">注册并登录</button>
+          <button id="syncLoginBtn" class="btn primary">登录</button>
+        </div>
+      </div>
+
+      <div id="syncUserSection" class="sync-section" hidden>
+        <p class="sync-user" id="syncUserInfo"></p>
+        <div class="sync-actions">
+          <button id="syncNowBtn" class="btn primary">立即同步</button>
+          <button id="syncPullBtn" class="btn">从云端恢复</button>
+          <button id="syncLogoutBtn" class="btn danger">退出登录</button>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button id="syncCloseBtn" class="btn">关闭</button>
       </div>
     </div>
   </div>
