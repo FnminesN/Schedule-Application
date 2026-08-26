@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>我的日程</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📅</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" id="brandArea">
+      <span class="logo">📅</span>
+      <span class="brand-name">我的日程</span>
+    </div>
+    <div class="back-area" id="backArea" hidden>
+      <button id="backBtn" class="back-btn" title="返回">
+        <span class="back-arrow">←</span> 返回
+      </button>
+    </div>
+
+    <div class="actions">
+      <button id="weekBtnTop" class="btn ghost" title="查看整周日程">周视图</button>
+      <button id="notifyBtn" class="btn ghost" title="通知提醒设置">🔔 提醒</button>
+      <button id="importBtn" class="btn ghost" title="导入日程（JSON/CSV/ICS）">导入</button>
+      <button id="exportBtn" class="btn ghost" title="导出备份">导出</button>
+      <button id="newEventBtn" class="btn primary">＋ 新建日程</button>
+    </div>
+  </header>
+
+  <section class="chips" id="categoryFilter" aria-label="分类筛选"></section>
+
+  <main class="screens" id="screens">
+    <!-- 第一级：月度天数菜单 -->
+    <section class="screen current" id="monthView">
+      <div class="month-header">
+        <button id="prevMonth" class="icon-btn" title="上个月" aria-label="上个月">‹</button>
+        <div id="monthLabel" class="month-label"></div>
+        <button id="nextMonth" class="icon-btn" title="下个月" aria-label="下个月">›</button>
+        <button id="todayMonthBtn" class="btn">今天</button>
+      </div>
+      <div class="month-weekdays">
+        <span>周一</span><span>周二</span><span>周三</span><span>周四</span>
+        <span>周五</span><span>周六</span><span>周日</span>
+      </div>
+      <div class="month-grid" id="monthGrid"></div>
+    </section>
+
+    <!-- 第二级：当日日程安排 -->
+    <section class="screen next" id="dayView">
+      <div class="day-view-header">
+        <button id="prevDay" class="icon-btn" title="前一天" aria-label="前一天">‹</button>
+        <div id="dayLabel" class="day-label"></div>
+        <button id="nextDay" class="icon-btn" title="后一天" aria-label="后一天">›</button>
+        <span class="spacer"></span>
+        <button id="dayNewBtn" class="btn primary">＋ 新建</button>
+      </div>
+      <div class="day-view-body">
+        <div class="single-day-wrap" id="singleDay"></div>
+        <aside class="day-side-panel">
+          <div class="panel-title">当日日程 <span id="dayPanelCount" class="panel-count"></span></div>
+          <div id="dayPanelList" class="panel-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- 周视图（保留） -->
+    <section class="screen next" id="weekView">
+      <div class="week-view-header">
+        <button id="prevWeek" class="icon-btn" title="上一周" aria-label="上一周">‹</button>
+        <div class="week-label" id="weekLabel"></div>
+        <button id="nextWeek" class="icon-btn" title="下一周" aria-label="下一周">›</button>
+        <button id="todayBtn" class="btn">回到本周</button>
+      </div>
+      <div class="week-body" id="weekBody"></div>
+    </section>
+  </main>
+
+  <footer class="hint">
+    点击月份中的日期进入当天日程 · 左上角“返回”可回到月菜单 · 数据保存在当前浏览器中
+  </footer>
+
+  <!-- 日程编辑弹窗 -->
+  <div class="modal-backdrop" id="eventModal">
+    <div class="modal">
+      <h2 id="evModalTitle">新建日程</h2>
+      <div class="form-grid">
+        <label class="field full">
+          <span>标题 <em class="req">*</em></span>
+          <input type="text" id="evTitle" placeholder="例如：团队周会" maxlength="100">
+        </label>
+        <label class="field">
+          <span>日期 <em class="req">*</em></span>
+          <input type="date" id="evDate">
+        </label>
+        <label class="field check">
+          <input type="checkbox" id="evAllDay">
+          <span>全天日程</span>
+        </label>
+        <div class="field full" id="evTimeFields">
+          <div class="time-row">
+            <label class="field">
+              <span>开始时间</span>
+              <input type="time" id="evStart">
+            </label>
+            <label class="field">
+              <span>结束时间</span>
+              <input type="time" id="evEnd">
+            </label>
+            <label class="field">
+              <span>提醒</span>
+              <select id="evRemind">
+                <option value="">不提醒</option>
+                <option value="0">准时提醒</option>
+                <option value="5">提前 5 分钟</option>
+                <option value="10">提前 10 分钟</option>
+                <option value="15">提前 15 分钟</option>
+                <option value="30">提前 30 分钟</option>
+                <option value="60">提前 1 小时</option>
+                <option value="120">提前 2 小时</option>
+                <option value="1440">提前 1 天</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <label class="field full">
+          <span>分类</span>
+          <select id="evCategory"></select>
+        </label>
+        <label class="field full">
+          <span>备注</span>
+          <textarea id="evNotes" rows="3" placeholder="可选：地点、准备事项等"></textarea>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button id="evCopyBtn" class="btn ghost">⧉ 复制到其他日期</button>
+        <button id="evDeleteBtn" class="btn danger">删除</button>
+        <span class="spacer"></span>
+        <button id="evCancelBtn" class="btn">取消</button>
+        <button id="evSaveBtn" class="btn primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 复制日程弹窗 -->
+  <div class="modal-backdrop" id="copyDialog">
+    <div class="modal small">
+      <h2 id="copyTitle">复制日程</h2>
+      <p class="muted" id="copySourceLabel"></p>
+      <label class="field">
+        <span>复制到日期 <em class="req">*</em></span>
+        <input type="date" id="copyTargetDate">
+      </label>
+      <div class="copy-list" id="copyList"></div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button id="copyCancelBtn" class="btn">取消</button>
+        <button id="copyConfirmBtn" class="btn primary">复制所选</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导入弹窗 -->
+  <div class="modal-backdrop" id="importDialog">
+    <div class="modal">
+      <h2>导入日程</h2>
+      <div class="tabs" id="importTabs">
+        <button class="tab active" data-type="json">JSON 备份</button>
+        <button class="tab" data-type="csv">CSV 表格</button>
+        <button class="tab" data-type="ics">ICS 日历</button>
+      </div>
+      <div class="drop-zone" id="importDrop">
+        <p>点击选择文件，或拖放文件到此处</p>
+        <input type="file" id="importFile" accept=".json,.csv,.ics,.txt">
+      </div>
+      <div id="importPreview" class="import-preview"></div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button id="importCancelBtn" class="btn">取消</button>
+        <button id="importConfirmBtn" class="btn primary" disabled>导入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 导出弹窗 -->
+  <div class="modal-backdrop" id="exportDialog">
+    <div class="modal small">
+      <h2>导出</h2>
+      <p class="muted">JSON 可用于完整备份与恢复；CSV 适合在表格软件中编辑后重新导入。</p>
+      <div class="export-btns">
+        <button id="exportJsonBtn" class="btn primary">导出 JSON 备份</button>
+        <button id="exportCsvBtn" class="btn">导出 CSV</button>
+      </div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button id="exportCloseBtn" class="btn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 分类管理弹窗 -->
+  <div class="modal-backdrop" id="catDialog">
+    <div class="modal small">
+      <h2>分类管理</h2>
+      <div id="catList" class="cat-list"></div>
+      <div class="cat-add">
+        <input type="text" id="newCatName" placeholder="新分类名称" maxlength="20">
+        <input type="color" id="newCatColor" value="#3b82f6" title="颜色">
+        <button id="addCatBtn" class="btn primary">添加</button>
+      </div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button id="catCloseBtn" class="btn">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 提醒设置弹窗 -->
+  <div class="modal-backdrop" id="notifyDialog">
+    <div class="modal small">
+      <h2>通知提醒</h2>
+      <p class="muted">开启后，日程到达提醒时间时，会在页面内弹出提示；同时尝试发送系统通知（需浏览器授权，且页面保持打开）。</p>
+      <label class="field check">
+        <input type="checkbox" id="notifySwitch">
+        <span>开启系统通知</span>
+      </label>
+      <div id="notifyStatus" class="notify-status"></div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button id="notifyTestBtn" class="btn">发送测试通知</button>
+        <button id="notifyCloseBtn" class="btn primary">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
