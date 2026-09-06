@@ -58,9 +58,14 @@ jobs:
         if: failure()
         run: |
           if [ -f gradle-build.log ]; then
-            tail -n 60 gradle-build.log | sed 's/\r$//' | while IFS= read -r line; do
-              echo "::error title=GradleLog::$line"
-            done
+            awk '/What went wrong/{found=1} found{print; count++} count>16{exit}' gradle-build.log |
+              sed 's/\r$//' | head -n 16 | while IFS= read -r line; do
+                echo "::error title=GradleErr::$line"
+              done
+            if ! grep -q "What went wrong" gradle-build.log; then
+              tail -n 16 gradle-build.log | sed 's/\r$//' | while IFS= read -r line; do
+                echo "::error title=GradleTail::$line"
+              done
           fi
 
       - name: Inspect APK
