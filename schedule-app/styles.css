@@ -1007,3 +1007,11 @@ textarea { resize: vertical; }
   .brand-name { display: none; }
   .brand .logo { font-size: 20px; }
 }
+
+/* 安卓/iOS 安全区适配（刘海屏、手势条） */
+.topbar { padding-top: calc(10px + env(safe-area-inset-top, 0px)); }
+.hint { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+.modal-backdrop {
+  padding-top: max(16px, env(safe-area-inset-top, 0px));
+  padding-bottom: max(16px, env(safe-area-inset-bottom, 0px));
+}

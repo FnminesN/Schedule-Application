@@ -9,6 +9,7 @@ let cloudSyncing = false;
 let cloudTimer = null;
 let suppressAutoSync = false;
 let stateReady = false;
+let nativeReminderTimer = null;
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const pad2 = n => String(n).padStart(2, '0');
@@ -137,6 +138,7 @@ function persist(next) {
     showToast('保存失败：浏览器存储空间可能已满');
   }
   scheduleCloudSync();
+  debounceNativeReminders();
 }
 
 function categoryById(id) {
@@ -1195,6 +1197,15 @@ function updateNotifyUI() {
   const status = $('notifyStatus');
   const sw = $('notifySwitch');
   status.className = 'notify-status';
+  if (isAndroidNative()) {
+    sw.disabled = false;
+    sw.checked = state.notifyEnabled;
+    status.textContent = state.notifyEnabled
+      ? '已开启：即使 App 不在前台，也会按日程时间发送通知。'
+      : '安卓版提醒：开启后将请求系统通知权限，关闭应用也能按时提醒。';
+    status.classList.add(state.notifyEnabled ? 'granted' : '');
+    return;
+  }
   if (!('Notification' in window)) {
     sw.disabled = true;
     sw.checked = false;
@@ -1357,14 +1368,20 @@ function bindEvents() {
   $('notifySwitch').addEventListener('change', async () => {
     const sw = $('notifySwitch');
     if (sw.checked) {
-      const perm = await Notification.requestPermission();
-      if (perm === 'granted') {
+      let ok = false;
+      if (isAndroidNative()) {
+        ok = await window.ScheduleNative.requestPermission();
+      } else {
+        const perm = await Notification.requestPermission();
+        ok = perm === 'granted';
+      }
+      if (ok) {
         state.notifyEnabled = true;
         persist();
-        showToast('系统通知已开启');
+        showToast(isAndroidNative() ? '提醒已开启：关闭应用也会按时通知' : '系统通知已开启');
       } else {
         sw.checked = false;
-        showToast('未获得通知权限，仍可在页面内收到提醒');
+        showToast(isAndroidNative() ? '未获得通知权限，无法在后台提醒' : '未获得通知权限，仍可在页面内收到提醒');
       }
     } else {
       state.notifyEnabled = false;
@@ -1374,6 +1391,10 @@ function bindEvents() {
   });
   $('notifyTestBtn').addEventListener('click', () => {
     showToast('🔔 这是页面内测试提醒');
+    if (isAndroidNative()) {
+      window.ScheduleNative.notifyNow('日程提醒测试', '如果你看到这条通知，说明安卓通知正常。');
+      return;
+    }
     if (state.notifyEnabled && 'Notification' in window && Notification.permission === 'granted') {
       try {
         new Notification('日程提醒测试', { body: '如果你看到这条通知，说明系统通知正常。' });
@@ -1768,10 +1789,35 @@ function cloudInit() {
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
+  if (isAndroidNative()) return;
   if (location.protocol === 'file:') return;
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(e => console.warn('Service Worker 注册失败', e));
   });
+}
+
+/* ================= 安卓原生（Capacitor） ================= */
+function isAndroidNative() {
+  return !!(window.ScheduleNative && window.ScheduleNative.isNative);
+}
+
+function debounceNativeReminders() {
+  if (!isAndroidNative()) return;
+  clearTimeout(nativeReminderTimer);
+  nativeReminderTimer = setTimeout(() => { syncNativeReminders().catch(() => {}); }, 1200);
+}
+
+async function syncNativeReminders() {
+  if (!isAndroidNative()) return;
+  try {
+    await window.ScheduleNative.sync({
+      events: state.events,
+      enabled: !!state.notifyEnabled,
+      now: Date.now(),
+    });
+  } catch (e) {
+    console.warn('安卓提醒调度失败', e);
+  }
 }
 
 function init() {
@@ -1782,6 +1828,20 @@ function init() {
   setInterval(checkReminders, 30000);
   cloudInit();
   registerServiceWorker();
+  if (window.ScheduleNative && window.ScheduleNative.isNative) {
+    window.ScheduleNative.registerBackHandler(() => {
+      const cur = document.querySelector('.screen.current');
+      if (cur && cur.id !== 'monthView') {
+        navBack();
+        return true;
+      }
+      return false;
+    });
+    syncNativeReminders().catch(() => {});
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) syncNativeReminders().catch(() => {});
+    });
+  }
 }
 
 init();

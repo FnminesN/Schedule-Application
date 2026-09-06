@@ -1,0 +1,8 @@
+{
+  "appId": "com.fnminesn.schedule",
+  "appName": "我的日程",
+  "webDir": "schedule-app",
+  "android": {
+    "backgroundColor": "#f1f5f9"
+  }
+}
