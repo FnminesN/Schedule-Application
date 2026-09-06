@@ -50,7 +50,18 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../gradle-build.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Report Gradle errors
+        if: failure()
+        run: |
+          if [ -f gradle-build.log ]; then
+            tail -n 60 gradle-build.log | sed 's/\r$//' | while IFS= read -r line; do
+              echo "::error title=GradleLog::$line"
+            done
+          fi
 
       - name: Inspect APK
         working-directory: android
